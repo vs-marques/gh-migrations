@@ -1,0 +1,17 @@
+# PONTUA MIGRATIONS - Dependências
+# Sistema de gerenciamento de migrations do PONTUA
+
+# Core dependencies
+psycopg2-binary>=2.9.10  # Versão com wheels pré-compilados para Python 3.13
+python-dotenv==1.0.0
+
+# GUI dependencies
+streamlit>=1.39.0  # Versão compatível com Python 3.13
+pandas>=2.2.3  # Versão com wheels pré-compilados para Python 3.13 no Windows
+numpy>=2.0.0  # Python 3.13 requer numpy 2.0+
+
+# Development dependencies
+pytest==7.4.3
+black==23.9.1
+flake8==6.1.0
+

@@ -1,0 +1,77 @@
+# Arquivos de configuracao com credenciais
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+env.local
+*.env
+.env*
+
+# Logs de migracao
+*.log
+logs/
+migration_*.log
+
+# Arquivos temporarios
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Arquivos de backup (NAO ignora .sql - sao as migrations)
+*.bak
+*.backup
+*.sql.backup
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Arquivos de dependencias
+node_modules/
+package-lock.json
+
+# Arquivos de build
+build/
+dist/
+*.egg-info/
+
+# Arquivos de teste (nao subir; .sql das migrations NAO e ignorado)
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+temp_check_*.py
+scripts/test_*.py
+scripts/test_*.sh
+
+# Ferramentas Python (cache)
+.mypy_cache/
+.ruff_cache/
+
+# Docker local (override com segredos)
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+# Dumps de banco (binario; migrations ficam em .sql)
+*.dump
+
+# Arquivos de documentacao gerados
+docs/_build/

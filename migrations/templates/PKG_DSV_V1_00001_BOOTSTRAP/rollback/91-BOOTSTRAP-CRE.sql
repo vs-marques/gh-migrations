@@ -1,0 +1,4 @@
+-- Rollback placeholder PKG_DSV_V1_00001_BOOTSTRAP
+-- DROP SCHEMA IF EXISTS ghostwritter CASCADE;
+
+SELECT 1;
