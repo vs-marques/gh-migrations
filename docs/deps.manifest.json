@@ -1,0 +1,39 @@
+{
+  "track": "core",
+  "version": 1,
+  "updated": "2026-08-07",
+  "notes": "Sequência canônica DSV; HMG/PRD usam o mesmo NNNN/SCHEMA com prefixo próprio.",
+  "sequence": [
+    {
+      "seq": 1,
+      "schema": "SUPERADMIN",
+      "depends_on_seq": [],
+      "reason": "Pacote zero: extensões, superadmin.migrations, log_migration_step"
+    },
+    {
+      "seq": 2,
+      "schema": "CORE",
+      "depends_on_seq": [1],
+      "reason": "users/companies/workspaces; registro em superadmin"
+    },
+    {
+      "seq": 3,
+      "schema": "SECURITY",
+      "depends_on_seq": [2],
+      "reason": "RBAC/sessions com FK para core"
+    },
+    {
+      "seq": 4,
+      "schema": "PLATFORM",
+      "depends_on_seq": [3],
+      "reason": "Obra literária; 02-SECURITY-EXP após platform + security"
+    }
+  ],
+  "batches": [
+    {
+      "date": "07.08.2026",
+      "path": "migrations/core/desenvolvimento/2026/Agosto/07.08.2026",
+      "packages_seq": [1, 2, 3, 4]
+    }
+  ]
+}

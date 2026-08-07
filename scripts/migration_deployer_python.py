@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
+# Caminho: scripts/migration_deployer_python.py
+# Descrição: Deploy automatizado de pacotes de migration (GH)
+# Data: 2026-08-07
+# Versão: 1.1.0
+# Histórico de Modificações:
+# - 2025-01-27: versão Nyoka / Pontua
+# - 2026-08-07: v1.1.0 — modos full / lote / last / package + manifesto de deps
+
 """
-🚀 PONTUA MIGRATION DEPLOYER - Python Version
-Tool para deploy automatizado de migrations usando conexão Python direta
+GhostWritter Migration Deployer — conexão Python direta (psycopg2).
+
+Modos CLI:
+  full     — todos os pacotes pendentes (ordem NNNN)
+  lote     — pacotes de uma data DD.MM.YYYY
+  last     — maior NNNN pendente
+  package  — pacote nominal (nome completo ou sufixo)
+  list / test / deploy / dry-run — legado
 """
 
+import argparse
 import os
 import sys
 import psycopg2
@@ -23,15 +38,18 @@ class MigrationDeployerPython:
             # scripts/migration_deployer_python.py -> scripts/ -> raiz do projeto
             self.base_path = Path(__file__).parent.parent
         
-        # Carregar variáveis de ambiente do arquivo env.local na raiz do projeto
-        env_file = self.base_path / "env.local"
-        if env_file.exists():
-            load_dotenv(env_file)
+        # Preferir .env do repo; fallback env.local (legado Nyoka)
+        env_dotenv = self.base_path / ".env"
+        env_local = self.base_path / "env.local"
+        if env_dotenv.exists():
+            load_dotenv(env_dotenv, override=True)
+        elif env_local.exists():
+            load_dotenv(env_local, override=True)
         else:
-            # Fallback para .env se env.local não existir
             load_dotenv()
         
         self.migrations_path = self.base_path / "migrations"
+        self.deps_manifest_path = self.base_path / "docs" / "deps.manifest.json"
         
         # Debug (desativado por padrão para evitar UnicodeEncodeError no console Windows)
         if os.environ.get("MIGRATION_DEPLOYER_DEBUG"):
@@ -67,7 +85,7 @@ class MigrationDeployerPython:
     def test_connection(self, environment: str) -> Tuple[bool, str]:
         """Testa a conexão com o banco"""
         if environment not in self.db_configs:
-            return False, f"❌ Ambiente '{environment}' não configurado"
+            return False, f"ERR Ambiente '{environment}' não configurado"
             
         config = self.db_configs[environment]
         
@@ -79,10 +97,10 @@ class MigrationDeployerPython:
             cursor.close()
             conn.close()
             
-            return True, f"✅ Conexão OK: {version[:50]}..."
+            return True, f"OK Conexão OK: {version[:50]}..."
             
         except Exception as e:
-            return False, f"❌ Erro de conexão: {str(e)}"
+            return False, f"ERR Erro de conexão: {str(e)}"
     
     def _normalize_foldername(self, name: str) -> str:
         """Normaliza nome de pasta para comparação (evita NFC/NFD no Windows)."""
@@ -131,7 +149,7 @@ class MigrationDeployerPython:
         env_path = self._resolve_env_path(environment)
         
         if not env_path or not env_path.exists():
-            print(f"❌ Ambiente '{environment}' não encontrado em {self.migrations_path}")
+            print(f"ERR Ambiente '{environment}' não encontrado em {self.migrations_path}")
             return []
             
         migrations = []
@@ -228,13 +246,19 @@ class MigrationDeployerPython:
             
             if result:
                 status, count = result
-                return status if count > 0 else 'pending'
+                if count > 0:
+                    # Pacotes GH registram INSERT com status=pending e muitas vezes
+                    # nao fazem UPDATE final para completed — registro = ja aplicado.
+                    st = (status or "").lower()
+                    if st in ("completed", "success", "ok", "applied"):
+                        return st
+                    return "applied"
             else:
-                return 'pending'
+                return "pending"
                 
         except Exception as e:
             # Se não conseguir conectar ou tabela não existir, retorna pending
-            print(f"⚠️ Não foi possível consultar status no banco: {e}")
+            print(f"WARN Não foi possível consultar status no banco: {e}")
             return 'pending'
     
     def _analyze_migration_package(self, package_path: Path) -> Optional[Dict]:
@@ -321,19 +345,19 @@ class MigrationDeployerPython:
         package_path = Path(package_path)
         
         if not package_path.exists():
-            return False, f"❌ Pacote não encontrado: {package_path}"
+            return False, f"ERR Pacote não encontrado: {package_path}"
             
         # Buscar arquivos SQL de execução (na raiz, excluindo pasta rollback e arquivos *_ROLLBACK.sql)
         sql_files = [f for f in package_path.glob("*.sql") 
                      if f.is_file() and not f.name.endswith('_ROLLBACK.sql')]
         
         if not sql_files:
-            return False, f"❌ Nenhum arquivo SQL de execução encontrado em {package_path}"
+            return False, f"ERR Nenhum arquivo SQL de execução encontrado em {package_path}"
             
         if dry_run:
             results = []
             for sql_file in sorted(sql_files):
-                results.append(f"🔍 DRY RUN: Executaria {sql_file.name}")
+                results.append(f" DRY RUN: Executaria {sql_file.name}")
             return True, "\n".join(results)
             
         # Testar conexão primeiro
@@ -358,10 +382,10 @@ class MigrationDeployerPython:
                     
                     # Executar SQL
                     cursor.execute(sql_content)
-                    results.append(f"✅ {sql_file.name} executado com sucesso")
+                    results.append(f"OK {sql_file.name} executado com sucesso")
                     
                 except Exception as e:
-                    results.append(f"❌ {sql_file.name} falhou: {str(e)}")
+                    results.append(f"ERR {sql_file.name} falhou: {str(e)}")
                     return False, "\n".join(results)
             
             cursor.close()
@@ -370,69 +394,209 @@ class MigrationDeployerPython:
             return True, "\n".join(results)
             
         except Exception as e:
-            return False, f"❌ Erro de conexão: {str(e)}"
+            return False, f"ERR Erro de conexão: {str(e)}"
+
+    def load_deps_manifest(self) -> Optional[Dict]:
+        if not self.deps_manifest_path.exists():
+            return None
+        with open(self.deps_manifest_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def find_package(self, environment: str, needle: str) -> Optional[Dict]:
+        """Resolve pacote por nome completo, NNNN ou sufixo de schema."""
+        needle = (needle or "").strip()
+        if not needle:
+            return None
+        migrations = self.list_available_migrations(environment)
+        exact = [m for m in migrations if m["package_name"] == needle]
+        if exact:
+            return exact[0]
+        upper = needle.upper()
+        # NNNN puro
+        if upper.isdigit():
+            n = int(upper)
+            by_seq = [m for m in migrations if self._extract_version_number(m["package_name"]) == n]
+            if len(by_seq) == 1:
+                return by_seq[0]
+            if by_seq:
+                return by_seq[-1]
+        # sufixo / contains
+        matches = [m for m in migrations if upper in m["package_name"].upper()]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            # prefer ends-with schema
+            ends = [m for m in matches if m["package_name"].upper().endswith("_" + upper) or m["schema"].upper() == upper]
+            if len(ends) == 1:
+                return ends[0]
+            print(f"WARN Ambíguo ({len(matches)}): {[m['package_name'] for m in matches]}")
+            return None
+        return None
+
+    def filter_by_date(self, migrations: List[Dict], date: str) -> List[Dict]:
+        date = (date or "").strip()
+        return [m for m in migrations if m.get("date") == date]
+
+    def pending_only(self, migrations: List[Dict], force: bool = False) -> List[Dict]:
+        if force:
+            return list(migrations)
+        done = {"completed", "success", "ok", "applied"}
+        return [m for m in migrations if (m.get("status") or "pending").lower() not in done]
+
+    def assert_deps(self, package: Dict, environment: str, force: bool = False, dry_run: bool = False) -> Tuple[bool, str]:
+        """Valida deps via manifesto (seq) quando disponivel."""
+        if force or dry_run:
+            return True, "skip deps (force/dry-run)"
+        manifest = self.load_deps_manifest()
+        if not manifest:
+            return True, "sem manifesto"
+        seq = self._extract_version_number(package["package_name"])
+        entry = next((x for x in manifest.get("sequence", []) if int(x["seq"]) == seq), None)
+        if not entry:
+            return True, "seq fora do manifesto"
+        needed = [int(x) for x in entry.get("depends_on_seq", [])]
+        if not needed:
+            return True, "sem deps"
+        all_pkgs = self.list_available_migrations(environment)
+        by_seq = {self._extract_version_number(m["package_name"]): m for m in all_pkgs}
+        done = {"completed", "success", "ok", "applied"}
+        missing = []
+        for n in needed:
+            dep = by_seq.get(n)
+            if not dep:
+                missing.append(f"{n:05d} (ausente no disco)")
+                continue
+            st = (dep.get("status") or "pending").lower()
+            if st not in done:
+                missing.append(f"{dep['package_name']} (status={dep.get('status')})")
+        if missing:
+            return False, "deps nao satisfeitas: " + ", ".join(missing)
+        return True, "deps ok"
+
+    def deploy_many(
+        self,
+        packages: List[Dict],
+        environment: str,
+        dry_run: bool = False,
+        force: bool = False,
+    ) -> Tuple[bool, str]:
+        if not packages:
+            return True, "Nada a aplicar (lista vazia)."
+        lines = []
+        for pkg in packages:
+            ok_deps, msg_deps = self.assert_deps(pkg, environment, force=force, dry_run=dry_run)
+            lines.append(f"-> {pkg['package_name']} [{pkg.get('status', '?')}] deps: {msg_deps}")
+            if not ok_deps:
+                lines.append(f"ERR Abortado: {msg_deps}")
+                return False, "\n".join(lines)
+            ok, msg = self.deploy_migration(pkg["package_path"], environment, dry_run=dry_run)
+            lines.append(msg)
+            if not ok:
+                lines.append(f"ERR Falha em {pkg['package_name']}")
+                return False, "\n".join(lines)
+            lines.append(f"OK {pkg['package_name']}")
+            if dry_run:
+                pkg["status"] = "applied"
+        return True, "\n".join(lines)
+
+    def deploy_full(self, environment: str, dry_run: bool = False, force: bool = False) -> Tuple[bool, str]:
+        pkgs = self.pending_only(self.list_available_migrations(environment), force=force)
+        return self.deploy_many(pkgs, environment, dry_run=dry_run, force=force)
+
+    def deploy_lote(
+        self, environment: str, date: str, dry_run: bool = False, force: bool = False
+    ) -> Tuple[bool, str]:
+        all_pkgs = self.list_available_migrations(environment)
+        lote = self.filter_by_date(all_pkgs, date)
+        if not lote:
+            return False, f"ERR Nenhum pacote na data {date} para {environment}"
+        pkgs = self.pending_only(lote, force=force)
+        return self.deploy_many(pkgs, environment, dry_run=dry_run, force=force)
+
+    def deploy_last(self, environment: str, dry_run: bool = False, force: bool = False) -> Tuple[bool, str]:
+        all_pkgs = self.list_available_migrations(environment)
+        if not all_pkgs:
+            return False, f"ERR Nenhum pacote em {environment}"
+        pending = self.pending_only(all_pkgs, force=False)
+        if force and not pending:
+            target = all_pkgs[-1]
+        elif pending:
+            target = pending[-1]
+        else:
+            return True, "Nada pendente (use --force para reaplicar o último do disco)."
+        return self.deploy_many([target], environment, dry_run=dry_run, force=force)
+
+    def deploy_package_named(
+        self, environment: str, name: str, dry_run: bool = False, force: bool = False
+    ) -> Tuple[bool, str]:
+        pkg = self.find_package(environment, name)
+        if not pkg:
+            return False, f"ERR Pacote não encontrado: {name}"
+        if not force and (pkg.get("status") or "pending").lower() in ("completed", "success", "ok", "applied"):
+            return True, f"Ja aplicado: {pkg['package_name']} (use --force para reaplicar)"
+        return self.deploy_many([pkg], environment, dry_run=dry_run, force=force)
     
     def interactive_deploy(self):
         """Interface interativa para deploy de migrations"""
-        print("🚀 PONTUA MIGRATION DEPLOYER - Python Version")
+        print("GhostWritter Migration Deployer")
         print("=" * 60)
         
         # Selecionar ambiente
         environments = ["desenvolvimento", "homologação", "produção"]
-        print("\n📋 Ambientes disponíveis:")
+        print("\n Ambientes disponíveis:")
         for i, env in enumerate(environments, 1):
             print(f"  {i}. {env}")
             
         try:
-            env_choice = int(input("\n🎯 Selecione o ambiente (1-3): ")) - 1
+            env_choice = int(input("\n Selecione o ambiente (1-3): ")) - 1
             if env_choice < 0 or env_choice >= len(environments):
-                print("❌ Opção inválida")
+                print("ERR Opção inválida")
                 return
                 
             environment = environments[env_choice]
         except ValueError:
-            print("❌ Opção inválida")
+            print("ERR Opção inválida")
             return
             
         # Testar conexão
-        print(f"\n🔍 Testando conexão com {environment}...")
+        print(f"\n Testando conexão com {environment}...")
         success, message = self.test_connection(environment)
         print(message)
         
         if not success:
-            print("❌ Não é possível continuar sem conexão com o banco")
+            print("ERR Não é possível continuar sem conexão com o banco")
             return
             
         # Listar migrations disponíveis
         migrations = self.list_available_migrations(environment)
         
         if not migrations:
-            print(f"❌ Nenhuma migration encontrada para {environment}")
+            print(f"ERR Nenhuma migration encontrada para {environment}")
             return
             
-        print(f"\n📦 Migrations disponíveis para {environment}:")
+        print(f"\n Migrations disponíveis para {environment}:")
         for i, migration in enumerate(migrations, 1):
             print(f"  {i}. {migration['package_name']} ({migration['date']})")
             print(f"     Schema: {migration['schema']} | Arquivos: {len(migration['sql_files'])}")
             
         try:
-            migration_choice = int(input(f"\n🎯 Selecione a migration (1-{len(migrations)}): ")) - 1
+            migration_choice = int(input(f"\n Selecione a migration (1-{len(migrations)}): ")) - 1
             if migration_choice < 0 or migration_choice >= len(migrations):
-                print("❌ Opção inválida")
+                print("ERR Opção inválida")
                 return
                 
             selected_migration = migrations[migration_choice]
         except ValueError:
-            print("❌ Opção inválida")
+            print("ERR Opção inválida")
             return
             
         # Confirmar ação
-        print(f"\n📋 Migration selecionada:")
+        print(f"\n Migration selecionada:")
         print(f"  Pacote: {selected_migration['package_name']}")
         print(f"  Data: {selected_migration['date']}")
         print(f"  Arquivos: {', '.join(selected_migration['sql_files'])}")
         
-        action = input("\n🎯 Ação (deploy/dry-run): ").lower().strip()
+        action = input("\n Ação (deploy/dry-run): ").lower().strip()
         
         if action == "deploy":
             success, message = self.deploy_migration(
@@ -447,56 +611,125 @@ class MigrationDeployerPython:
                 dry_run=True
             )
         else:
-            print("❌ Ação inválida. Use: deploy ou dry-run")
+            print("ERR Ação inválida. Use: deploy ou dry-run")
             return
             
-        print(f"\n📊 Resultado:")
+        print(f"\n Resultado:")
         print(message)
         
         if success:
-            print("✅ Operação concluída com sucesso!")
+            print("OK Operação concluída com sucesso!")
         else:
-            print("❌ Operação falhou!")
+            print("ERR Operação falhou!")
 
 def main():
     """Função principal"""
     deployer = MigrationDeployerPython()
-    
-    if len(sys.argv) > 1:
-        command = sys.argv[1].lower()
-        
-        if command == "test":
-            env = sys.argv[2] if len(sys.argv) > 2 else "homologação"
-            success, message = deployer.test_connection(env)
-            print(message)
-            
-        elif command == "list":
-            env = sys.argv[2] if len(sys.argv) > 2 else "desenvolvimento"
-            migrations = deployer.list_available_migrations(env)
-            print(f"📦 Migrations disponíveis para {env}:")
-            for migration in migrations:
-                print(f"  • {migration['package_name']} ({migration['date']})")
-                
-        elif command == "deploy":
-            if len(sys.argv) < 4:
-                print("❌ Uso: python migration_deployer_python.py deploy <package_path> <environment>")
-                return
-            package_path, environment = sys.argv[2], sys.argv[3]
-            success, message = deployer.deploy_migration(package_path, environment)
-            print(message)
-            
-        elif command == "dry-run":
-            if len(sys.argv) < 4:
-                print("❌ Uso: python migration_deployer_python.py dry-run <package_path> <environment>")
-                return
-            package_path, environment = sys.argv[2], sys.argv[3]
-            success, message = deployer.deploy_migration(package_path, environment, dry_run=True)
-            print(message)
-                
-        else:
-            print("❌ Comando inválido. Use: test, list, deploy, dry-run ou execute sem parâmetros para modo interativo")
-    else:
+
+    parser = argparse.ArgumentParser(
+        description="GhostWritter Migration Deployer",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos:
+  python scripts/migration_deployer_python.py full -e desenvolvimento
+  python scripts/migration_deployer_python.py lote -e desenvolvimento -d 07.08.2026
+  python scripts/migration_deployer_python.py last
+  python scripts/migration_deployer_python.py package PKG_DSV_V1_00004_PLATFORM
+  python scripts/migration_deployer_python.py package 00003 --dry-run
+  python scripts/migration_deployer_python.py list desenvolvimento
+        """,
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        help="full | lote | last | package | list | test | deploy | dry-run",
+    )
+    parser.add_argument("args", nargs="*", help="Argumentos posicionais (legado / package name)")
+    parser.add_argument("-e", "--env", default="desenvolvimento", help="Ambiente (default: desenvolvimento)")
+    parser.add_argument("-d", "--date", default=None, help="Data do lote DD.MM.YYYY")
+    parser.add_argument("-p", "--package", default=None, help="Nome / NNNN / schema do pacote")
+    parser.add_argument("--dry-run", action="store_true", help="Não executa SQL")
+    parser.add_argument("--force", action="store_true", help="Não pula completed; ignora gate de deps")
+
+    # Compat: se argv legado sem subcomando reconhecido pelo argparse ambíguo,
+    # manter fluxo antigo quando command em {test,list,deploy,dry-run} com paths.
+    if len(sys.argv) <= 1:
         deployer.interactive_deploy()
+        return
+
+    ns = parser.parse_args()
+    command = (ns.command or "").lower()
+    environment = ns.env
+    dry = ns.dry_run
+    force = ns.force
+
+    if command == "test":
+        env = ns.args[0] if ns.args else environment
+        ok, message = deployer.test_connection(env)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "list":
+        env = ns.args[0] if ns.args else environment
+        migrations = deployer.list_available_migrations(env)
+        print(f"Migrations ({env}):")
+        for migration in migrations:
+            print(
+                f"  • {migration['package_name']} ({migration['date']}) "
+                f"[{migration.get('status', '?')}]"
+            )
+        sys.exit(0)
+
+    if command == "full":
+        ok, message = deployer.deploy_full(environment, dry_run=dry, force=force)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "lote":
+        date = ns.date or (ns.args[0] if ns.args else None)
+        if not date:
+            print("ERR Informe a data: --date DD.MM.YYYY")
+            sys.exit(2)
+        ok, message = deployer.deploy_lote(environment, date, dry_run=dry, force=force)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "last":
+        ok, message = deployer.deploy_last(environment, dry_run=dry, force=force)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "package":
+        name = ns.package or (ns.args[0] if ns.args else None)
+        if not name:
+            print("ERR Informe o pacote: --package PKG_... | NNNN | SCHEMA")
+            sys.exit(2)
+        ok, message = deployer.deploy_package_named(environment, name, dry_run=dry, force=force)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "deploy":
+        if len(ns.args) < 2:
+            print("ERR Uso: deploy <package_path> <environment>")
+            sys.exit(2)
+        package_path, env = ns.args[0], ns.args[1]
+        ok, message = deployer.deploy_migration(package_path, env, dry_run=False)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    if command == "dry-run":
+        if len(ns.args) < 2:
+            print("ERR Uso: dry-run <package_path> <environment>")
+            sys.exit(2)
+        package_path, env = ns.args[0], ns.args[1]
+        ok, message = deployer.deploy_migration(package_path, env, dry_run=True)
+        print(message)
+        sys.exit(0 if ok else 1)
+
+    print(f"ERR Comando inválido: {command}")
+    parser.print_help()
+    sys.exit(2)
 
 if __name__ == "__main__":
     main()
