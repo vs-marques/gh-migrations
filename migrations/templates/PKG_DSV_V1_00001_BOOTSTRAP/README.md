@@ -1,21 +1,23 @@
 # Migration template: PKG_DSV_V1_00001_BOOTSTRAP
 
-## Informações gerais
-
-| Campo | Valor |
-|--------|--------|
-| **Pacote** | `PKG_DSV_V1_00001_BOOTSTRAP` |
-| **Script** | `01-BOOTSTRAP-CRE.sql` |
-| **Rollback** | `rollback/91-BOOTSTRAP-CRE.sql` |
-| **Ambiente** | desenvolvimento |
-| **Trilha** | core |
-| **Versão** | 1.0.0 |
+## Informações Gerais
+- **Pacote**: `PKG_DSV_V1_XXXXX_SCHEMA`
+- **Arquivo**: `[NUMERO]-[SCHEMA]-[AÇÃO].sql`
+- **Rollback**: `rollback/9[NUMERO]-[SCHEMA]-[AÇÃO].sql`
+- **Ambiente**: desenvolvimento
+- **Banco**: GH (trilha core)
 
 ## Objetivo
-
-Bootstrap inicial do schema GhostWritter (projetos, faíscas, mural).  
-**Placeholder** — substituir quando o modelo de dados estiver fechado.
+Template — copiar e preencher conforme `docs/MIGRATIONS_MASTER_REFERENCE.md`.
 
 ## Dependências
+- Consultar ordem canônica: SUPERADMIN → CORE → SECURITY → PLATFORM
 
-- Nenhuma (pacote zero).
+## Checklist
+- [ ] Cabeçalho completo + spool `\o`
+- [ ] Um arquivo = um schema
+- [ ] INSERT em `superadmin.migrations` (package_name, file_name, environment, notes, checksum)
+- [ ] `log_migration_step` com 3 parâmetros
+- [ ] Validação final com JOIN em `migration_logs`
+- [ ] Rollback atualiza `status = 'rolled_back'`
+- [ ] README no formato da referência
