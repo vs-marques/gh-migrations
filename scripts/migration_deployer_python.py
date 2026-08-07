@@ -379,6 +379,19 @@ class MigrationDeployerPython:
                     # Ler arquivo SQL
                     with open(sql_file, 'r', encoding='utf-8') as f:
                         sql_content = f.read()
+
+                    # Remover meta-comandos do psql (\o, \echo, \set, etc.) —
+                    # psycopg2 so executa SQL puro.
+                    cleaned_lines = []
+                    for line in sql_content.splitlines():
+                        stripped = line.lstrip()
+                        if stripped.startswith("\\"):
+                            continue
+                        cleaned_lines.append(line)
+                    sql_content = "\n".join(cleaned_lines)
+                    if not sql_content.strip():
+                        results.append(f"OK {sql_file.name} (vazio apos strip psql meta)")
+                        continue
                     
                     # Executar SQL
                     cursor.execute(sql_content)
